@@ -1,0 +1,229 @@
+_schema-version: '3.1'
+ID: capPrueba3
+version: 1.0.0
+description: A simple CAP project.
+parameters:
+  deploy_mode: html5-repo
+  enable-parallel-deployments: true
+  subdomain: e3992ff0trial
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - rm -rf build/dist
+        - mkdir -p build/dist
+        - rm -rf build/ui-deployer
+        - mkdir -p build/ui-deployer
+    - builder: custom
+      commands:
+        - npm install --production
+        - >-
+          bash -c "cds -v | grep 'cds-dk' || npm i --production --no-save
+          @sap/cds-dk"
+        - bash -c "export PATH=$PATH:$(pwd)/node_modules/.bin"
+        - cds build --production
+  after-all:
+    - builder: custom
+      commands:
+        - npm install
+modules:
+  - name: capPrueba3-capprueba3.risks
+    type: html5
+    path: app/capprueba3.risks
+    build-parameters:
+      builder: custom
+      commands:
+        - rm -rf dist-zip dist
+        - npm install
+        - >-
+          npx -p @ui5/cli@^3.0.0 ui5 build --dest dist
+          --include-task=generateCachebusterInfo
+        - mkdir dist-zip
+        - bash -c "cd dist && npx bestzip ../dist-zip/capprueba3risks.zip *"
+      _artifactName: capprueba3risks.zip
+      supported-platforms: []
+      build-result: dist-zip
+  - name: capPrueba3-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+    build-parameters:
+      builder: npm
+      ignore:
+        - node_modules
+        - package-lock.json
+    requires:
+      - name: capPrueba3-service-uaa
+      - name: capPrueba3-service-db
+  - name: capPrueba3-srv
+    type: nodejs
+    path: gen/srv
+    parameters:
+      memory: 256MB
+    provides:
+      - name: srv-api
+        properties:
+          srv-url: ${default-url}
+    build-parameters:
+      builder: npm
+      ignore:
+        - node_modules
+        - package-lock.json
+    requires:
+      - name: capPrueba3-service-uaa
+      - name: capPrueba3-service-db
+      - name: capPrueba3-service-destination
+      - name: capPrueba3-service-metadata
+      - name: capPrueba3-service-connectivity
+      - name: capPrueba3-service-logs
+  - name: capPrueba3-aux-destinations
+    type: com.sap.application.content
+    parameters:
+      content:
+        subaccount:
+          existing_destinations_policy: update
+          destinations:
+            - Authentication: OAuth2UserTokenExchange
+              Name: capPrueba3-service-uaa
+              ServiceInstanceName: capPrueba3-uaa
+              ServiceKeyName: capPrueba3-uaa-key
+              sap.cloud.service: lcap.capPrueba3
+            - Authentication: OAuth2UserTokenExchange
+              Name: capPrueba3-app-srv
+              TokenServiceInstanceName: capPrueba3-uaa
+              TokenServiceKeyName: capPrueba3-uaa-key
+              URL: ~{srv-api/srv-url}
+              sap.cloud.service: lcap.capPrueba3
+            - Name: capPrueba3-service-html5-apps-repo-host
+              ServiceInstanceName: capPrueba3-html5-apps-repo-host
+              ServiceKeyName: capPrueba3-html5-apps-repo-host-key
+              sap.cloud.service: lcap.capPrueba3
+            - Authentication: OAuth2UserTokenExchange
+              Name: capPrueba3-RiskManagementService
+              TokenServiceInstanceName: capPrueba3-uaa
+              TokenServiceKeyName: capPrueba3-uaa-key
+              URL: ~{srv-api/srv-url}/service/RiskManagementService
+              sap.cloud.service: lcap.capPrueba3
+              sap.applicationdevelopment.actions.enabled: false
+              sap.build.usage: CAP
+              sap.processautomation.enabled: false
+              HTML5.DynamicDestination: false
+              WebIDEEnabled: false
+              MobileEnabled: false
+              AppgyverEnabled: false
+    build-parameters:
+      no-source: true
+    requires:
+      - name: capPrueba3-service-uaa
+        parameters:
+          service-key:
+            name: capPrueba3-uaa-key
+      - name: srv-api
+      - name: capPrueba3-service-html5-apps-repo-host
+        parameters:
+          service-key:
+            name: capPrueba3-html5-apps-repo-host-key
+      - name: capPrueba3-service-destination
+        parameters:
+          content-target: true
+  - name: capPrueba3-launchpad
+    type: html5
+    path: build/launchpad
+    build-parameters:
+      builder: custom
+      commands:
+        - npm install
+        - >-
+          npx -p @ui5/cli@^3.0.0 ui5 build --dest dist
+          --include-task=generateCachebusterInfo
+        - bash -c "cd dist && npx bestzip ../../../build/dist/launchpad.zip *"
+        - rm -rf dist
+      _artifactName: launchpad.zip
+      supported-platforms: []
+      build-result: ../../build/dist
+  - name: capPrueba3-aux-ui-deployer
+    type: com.sap.application.content
+    path: build/ui-deployer
+    build-parameters:
+      build-result: resources
+      requires:
+        - name: capPrueba3-capprueba3.risks
+          artifacts:
+            - capprueba3risks.zip
+          target-path: resources
+        - name: capPrueba3-launchpad
+          artifacts:
+            - launchpad.zip
+          target-path: resources
+    requires:
+      - name: capPrueba3-service-html5-apps-repo-host
+        parameters:
+          content-target: true
+resources:
+  - type: org.cloudfoundry.managed-service
+    name: capPrueba3-service-uaa
+    parameters:
+      service: xsuaa
+      service-plan: application
+      service-name: capPrueba3-uaa
+      path: xs-security.json
+      config:
+        oauth2-configuration:
+          redirect-uris:
+            - https://${subdomain}.launchpad.${default-domain}/login/*
+            - https://${subdomain}.${default-domain}/login/*
+          credential-types:
+            - binding-secret
+            - x509
+        xsappname: capPrueba3-${space}
+        role-collections:
+          - description: RiskViewer
+            name: capPrueba3-RiskViewer-${space}
+            role-template-references:
+              - $XSAPPNAME.RiskViewer
+          - description: RiskManager
+            name: capPrueba3-RiskManager-${space}
+            role-template-references:
+              - $XSAPPNAME.RiskManager
+  - type: org.cloudfoundry.managed-service
+    name: capPrueba3-service-db
+    parameters:
+      service: hana
+      service-plan: hdi-shared
+      service-name: capPrueba3-db
+  - type: org.cloudfoundry.managed-service
+    name: capPrueba3-service-destination
+    parameters:
+      service: destination
+      service-plan: lite
+      service-name: capPrueba3-destination
+      config:
+        HTML5Runtime_enabled: true
+        version: 1.0.0
+  - type: org.cloudfoundry.user-provided-service
+    name: capPrueba3-service-metadata
+    parameters:
+      service: metadata
+      service-plan: standard
+      service-name: capPrueba3-metadata
+      config:
+        default-domain: ${default-domain}
+  - type: org.cloudfoundry.managed-service
+    name: capPrueba3-service-connectivity
+    parameters:
+      service: connectivity
+      service-plan: lite
+      service-name: capPrueba3-connectivity
+  - type: org.cloudfoundry.managed-service
+    name: capPrueba3-service-logs
+    parameters:
+      service: application-logs
+      service-plan: lite
+      service-name: capPrueba3-logs
+  - type: org.cloudfoundry.managed-service
+    name: capPrueba3-service-html5-apps-repo-host
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-host
+      service-name: capPrueba3-html5-apps-repo-host
